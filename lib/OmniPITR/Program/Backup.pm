@@ -452,4 +452,76 @@ sub _get_remote_writer_command {
     my $remote_sh = join ' ', @remote_command;
     return ( $self->{ 'ssh-path' }, $user_host, $remote_sh );
 }
+
+=head1 _generate_wal_segment_list()
+
+Helper function returning a list that includes all the WAL segments between to inputs. This is useful for finding the list of WAL segments needed for a backup.
+
+=cut
+
+# This assumes WAL sgement size = 16MB
+sub _generate_wal_segment_list {
+    my $self = shift;
+    my $from_file = shift;
+    my $to_file = shift;
+
+    $self->log->fatal('Bad range for WAL segments %s -> %s', $from_file, $to_file) if $from_file gt $to_file;
+
+    my @from = map { hex $_ } $from_file =~ m{(.{8})(.{8})(.{8})};
+
+    my @wal_list = ($from_file);
+
+    while ($from_file lt $to_file) {
+        $from[2]++;
+        if ($from[2] == 256) {
+            $from[2] = 0;
+            $from[1]++;
+        }
+        $from_file = sprintf '%08X%08X%08X', @from;
+        push @wal_list, $from_file unless $from_file =~ m{FF\z};
+    }
+
+    return @wal_list;
+}
+
+=head1 _parse_backup_file()
+
+Helper function that parses a backup file for the starting and ending WAL segment.
+
+=cut
+
+sub _parse_backup_file {
+    my $self = shift;
+    my $backup_file = shift;
+
+    my $from_file = undef;
+    my $to_file = undef;
+
+    my $fh;
+
+    if ('none' eq $self->{ 'source' }->{ 'compression' }) {
+        open $fh, '<', $backup_file or $self->log->fatal( 'Cannot open backup file %s for reading: %s', $backup_file, $OS_ERROR );
+    } else {
+        $self->{ $self->{ 'source' }->{ 'compression' } . '-path' } . ' -c -d ' . $backup_file
+        open $fh, '-|', 
+    }
+
+    while ( my $line = <$fh> ) {
+        if ($line =~ m{\A (START|STOP) \s+ WAL \s+ LOCATION: .* file \s+ ( [0-9A-f]{24} ) }x) {
+            if ($1 eq 'START') {
+                $from_file = qr{\A$2\z};
+            } else {
+                $to_file = qr{\A$2\z};
+            }
+        }
+        last if $from_file and $to_file;
+    }
+    close $fh;
+
+    $self->log->fatal( '.backup file (%s) does not contain START WAL LOCATION line in recognizable format.', $backup_file ) unless $from_file;
+    $self->log->fatal( '.backup file (%s) does not contain STOP WAL LOCATION line in recognizable format.', $backup_file ) unless $to_file;
+
+    return ($from_file, $to_file);
+}
+
 1;

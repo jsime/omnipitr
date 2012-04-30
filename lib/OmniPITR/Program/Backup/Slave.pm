@@ -80,7 +80,7 @@ was not given) - for checkpoint on slave.
 sub wait_for_xlog_archive_to_be_ready {
     my $self = shift;
     return $self->wait_for_checkpoint_location_change() unless $self->{ 'call-master' };
-    $self->wait_for_file( $self->{ 'source' }->{ 'path' }, $self->{ 'stop_backup_filename_re' } );
+    $self->{ 'dot_backup_filename' } = $self->wait_for_file( $self->{ 'source' }->{ 'path' }, $self->{ 'stop_backup_filename_re' } );
     return;
 }
 
@@ -95,7 +95,10 @@ sub compress_xlogs {
     my $self = shift;
 
     $self->make_dot_backup_file();
-    $self->uncompress_wal_archive_segments();
+
+    my @wal_list = $self->_generate_wal_segment_list($self->_parse_backup_file($self->{ 'dot_backup_filename' }));
+
+    $self->uncompress_wal_archive_segments(\@wal_list);
 
     $self->log->time_start( 'Compressing xlogs' ) if $self->verbose;
 
@@ -110,12 +113,11 @@ sub compress_xlogs {
     my $transform_to = basename( $self->{ 'data-dir' } ) . '/pg_xlog';
     my $transform_command = sprintf 's#^\(%s\|%s\)#%s#', $source_transform_from, $dot_backup_transform_from, $transform_to;
 
-    my @stuff_to_compress = ( basename( $self->{ 'source' }->{ 'path' } ) );
-    push @stuff_to_compress, File::Spec->catfile( $self->{ 'temp-dir' }, $self->{ 'dot_backup_filename' } ) if $self->{ 'dot_backup_filename' };
+    push @wal_list, File::Spec->catfile( $self->{ 'temp-dir' }, $self->{ 'dot_backup_filename' } ) if -f File::Spec->catfile( $self->{ 'temp-dir' }, $self->{ 'dot_backup_filename' } );
 
     $self->tar_and_compress(
         'work_dir'  => dirname( $self->{ 'source' }->{ 'path' } ),
-        'tar_dir'   => \@stuff_to_compress,
+        'tar_dir'   => \@wal_list,
         'transform' => $transform_command,
         'data_type' => 'xlog',
     );
@@ -137,18 +139,19 @@ This work is being done in this function.
 
 sub uncompress_wal_archive_segments {
     my $self = shift;
+    my $wal_list = shift;
+
     return if 'none' eq $self->{ 'source' }->{ 'compression' };
 
+    my @wal_segments = @{ $wal_list };
+
     my $old_source = $self->{ 'source' }->{ 'path' };
-    my $new_source = File::Spec->catfile( $self->{ 'temp-dir' }, 'uncompresses_pg_xlogs' );
+    my $new_source = File::Spec->catfile( $self->{ 'temp-dir' }, 'uncompressed_pg_xlogs' );
     $self->{ 'source' }->{ 'path' } = $new_source;
 
     mkpath( [ $new_source ], 0, oct( "755" ) );
 
-    opendir my $dir, $old_source or $self->log->fatal( 'Cannot open wal-archive (%s) : %s', $old_source, $OS_ERROR );
     my $extension = ext_for_compression( $self->{ 'source' }->{ 'compression' } );
-    my @wal_segments = sort grep { -f File::Spec->catfile( $old_source, $_ ) && /\Q$extension\E\z/ } readdir( $dir );
-    close $dir;
 
     $self->log->log( '%s wal segments have to be uncompressed', scalar @wal_segments );
 
@@ -168,11 +171,9 @@ sub uncompress_wal_archive_segments {
     );
 
     for my $segment ( @wal_segments ) {
-        my $old_file = File::Spec->catfile( $old_source, $segment );
+        my $old_file = File::Spec->catfile( $old_source, $segment . $extension );
         my $new_file = File::Spec->catfile( $new_source, $segment );
-        copy( $old_file, $new_file ) or $self->log->fatal( 'Cannot copy %s to %s: %s', $old_file, $new_file, $OS_ERROR );
-        $self->log->log( 'File copied: %s -> %s', $old_file, $new_file );
-        my @uncompress = ( $self->{ $self->{ 'source' }->{ 'compression' } . '-path' }, '-d', $new_file );
+        my @uncompress = ( $self->{ $self->{ 'source' }->{ 'compression' } . '-path' }, '-c', '-d', $old_file, '>', $new_file );
         unshift @uncompress, $self->{ 'nice-path' } unless $self->{ 'not-nice' };
         $runner->add_command(
             'command'  => \@uncompress,
@@ -237,7 +238,7 @@ sub make_dot_backup_file {
         $self->{ 'dot_backup_filename' } = $output_filename;
         return;
     }
-    $self->log->fatal( 'Cannot write .backup file file %s : %s', $output_filename, $OS_ERROR );
+    $self->log->fatal( 'Cannot write .backup file %s : %s', $output_filename, $OS_ERROR );
 }
 
 =head1 wait_for_checkpoint_location_change()
