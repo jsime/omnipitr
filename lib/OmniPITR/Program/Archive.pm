@@ -98,13 +98,18 @@ sub send_to_destinations {
             $destination_file_path =~ s{/*\z}{};
             $destination_file_path .= '/' . basename( $local_file );
 
+            my $command = [ $self->{ 'rsync-path' } ];
+            push(@{$command}, '-e', sprintf('"ssh -p %d"', $dst->{'port'})) if $dst->{'port'};
+            push(@{$command}, $local_file, $destination_file_path);
+
             $runner->add_command(
-                'command'               => [ $self->{ 'rsync-path' }, $local_file, $destination_file_path ],
+                'command'               => $command,
                 'is_backup'             => $is_backup,
                 'local_file'            => $local_file,
                 'destination_file_path' => $destination_file_path,
                 'destination_type'      => $destination_type,
                 'dst_path'              => $dst->{ 'path' },
+                'dst_port'              => $dst->{ 'port' },
             );
         }
     }
@@ -327,8 +332,13 @@ sub read_args_normalization {
 
         for my $item ( @items ) {
             my $current = { 'compression' => 'none', };
-            if ( $item =~ s/\A(gzip|bzip2|lzma)=// ) {
-                $current->{ 'compression' } = $1;
+            while ( $item =~ s/\A((?:gzip|bzip2|lzma)|\d+)=// ) {
+                my $o = $1;
+                if ($o =~ /^\d+$/o) {
+                    $current->{'port'} = $o;
+                } else {
+                    $current->{'compression'} = $o;
+                }
             }
             $current->{ 'path' } = $item;
             push @{ $D }, $current;
