@@ -287,8 +287,13 @@ sub read_args_normalization {
 
         for my $item ( @items ) {
             my $current = { 'compression' => 'none', };
-            if ( $item =~ s/\A(gzip|bzip2|lzma)=// ) {
-                $current->{ 'compression' } = $1;
+            while ( $item =~ s/\A((?:gzip|bzip2|lzma)|\d+)=// ) {
+                my $o = $1;
+                if ($o =~ /^\d+$/o) {
+                    $current->{'port'} = $o;
+                } else {
+                    $current->{'compression'} = $o;
+                }
             }
             $current->{ 'path' } = $item;
             push @{ $D }, $current;

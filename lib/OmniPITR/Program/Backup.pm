@@ -311,8 +311,12 @@ sub deliver_to_all_remote_destinations {
             $destination_filename =~ s{/*\z}{/};
             $destination_filename .= $filename;
 
+            my $command = [ $self->{ 'rsync-path' } ];
+            push(@{$command}, '-e', sprintf('ssh -p %d', $dst->{'port'})) if $dst->{'port'};
+            push(@{$command}, $source_filename, $destination_filename);
+
             $runner->add_command(
-                'command'              => [ $self->{ 'rsync-path' }, $source_filename, $destination_filename ],
+                'command'              => $command,
                 'source_filename'      => $source_filename,
                 'destination_filename' => $destination_filename,
             );
