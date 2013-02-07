@@ -99,7 +99,7 @@ sub send_to_destinations {
             $destination_file_path .= '/' . basename( $local_file );
 
             my $command = [ $self->{ 'rsync-path' } ];
-            push(@{$command}, '-e', sprintf('"ssh -p %d"', $dst->{'port'})) if $dst->{'port'};
+            push(@{$command}, '-e', sprintf('ssh -p %d', $dst->{'port'})) if $dst->{'port'};
             push(@{$command}, $local_file, $destination_file_path);
 
             $runner->add_command(
